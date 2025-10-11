@@ -1,0 +1,61 @@
+# Environment variables
+.env
+*.env
+!*.env.example
+
+# Certificates and keys (SECURITY: Never commit these!)
+certs/*.key
+certs/*.crt
+certs/*.csr
+certs/*.srl
+certs/*.pem
+nginx/ssl/*.key
+nginx/ssl/*.pem
+!certs/.gitkeep
+!nginx/ssl/.gitkeep
+
+# Logs
+*.log
+mosquitto/log/*
+mosquitto/data/*
+!mosquitto/log/.gitkeep
+!mosquitto/data/.gitkeep
+
+# Database volumes
+postgres_data/
+redis_data/
+
+# Docker
+.docker/
+
+# Backend build
+backend/build/
+backend/.gradle/
+backend/out/
+backend/*.jar
+backend/.kotlin/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+*~
+.DS_Store
+
+# OS
+Thumbs.db
+.directory
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Temporary files
+*.tmp
+*.bak
+*.backup
