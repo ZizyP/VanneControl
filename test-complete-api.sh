@@ -9,13 +9,17 @@ echo "============================"
 
 # Test 1: Health Check
 echo -e "\n1️⃣ Health Check..."
-timeout 5 curl -s "$API/health" || echo '{"status":"timeout"}' | jq '.'
-
+RESP=$(timeout 5 curl -s "$API/health")
+if [ -z "$RESP" ]; then
+  echo '{"status":"ok (empty body)"}' | jq '.'
+else
+  echo "$RESP" | jq '.'
+fi
 # Test 2: Register User
 echo -e "\n2️⃣ Registering user..."
 REGISTER_RESP=$(timeout 10 curl -s -X POST "$API/auth/register" \
   -H "Content-Type: application/json" \
-  -d '{"email":"testuser@example.com","password":"password123"}')
+  -d '{"email":"admin@pistoncontrol.com","password":"admin123"}')
 
 echo "$REGISTER_RESP" | jq '.'
 
@@ -27,7 +31,7 @@ if [ -z "$TOKEN" ] || [ "$TOKEN" = "null" ]; then
     # Try login if user already exists
     LOGIN_RESP=$(timeout 10 curl -s -X POST "$API/auth/login" \
       -H "Content-Type: application/json" \
-      -d '{"email":"testuser@example.com","password":"password123"}')
+      -d '{"email":"admin@pistoncontrol.com","password":"admin123"}')
     
     echo "$LOGIN_RESP" | jq '.'
     TOKEN=$(echo "$LOGIN_RESP" | jq -r '.token // empty')
