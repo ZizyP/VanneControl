@@ -4,7 +4,7 @@ import org.jetbrains.exposed.sql.Table
 import org.jetbrains.exposed.sql.javatime.timestamp
 
 object Users : Table("users") {
-    val id = uuid("id")
+    val id = uuid("id").autoGenerate()
     val email = text("email")
     val passwordHash = text("password_hash")
     val role = text("role")
