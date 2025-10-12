@@ -49,11 +49,9 @@ fun Route.authRoutes(jwtSecret: String, jwtIssuer: String, jwtAudience: String) 
                 return@post call.respond(HttpStatusCode.Conflict, mapOf("error" to "Email already registered"))
             }
             
-            // Generate UUID and hash password BEFORE database operation
             val userId = UUID.randomUUID()
             val passwordHash = BCrypt.hashpw(request.password, BCrypt.gensalt())
             
-            // Insert without trying to retrieve ID from result
             dbQuery {
                 Users.insert {
                     it[id] = userId
