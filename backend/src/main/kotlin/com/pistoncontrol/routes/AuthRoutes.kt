@@ -14,6 +14,9 @@ import com.auth0.jwt.JWT
 import com.auth0.jwt.algorithms.Algorithm
 import java.time.Instant
 import java.util.*
+import mu.KotlinLogging
+
+private val logger = KotlinLogging.logger {}
 
 @Serializable
 data class LoginRequest(val email: String, val password: String)
@@ -72,12 +75,14 @@ fun Route.authRoutes(jwtSecret: String, jwtIssuer: String, jwtAudience: String) 
                 .withExpiresAt(Date(System.currentTimeMillis() + 86400000))
                 .sign(Algorithm.HMAC256(jwtSecret))
             
+            logger.info { "User registered: ${request.email}" }
+            
             call.respond(HttpStatusCode.Created, AuthResponse(
                 token = token,
                 user = UserInfo(userId.toString(), request.email, "user")
             ))
         } catch (e: Exception) {
-            e.printStackTrace()
+            logger.error(e) { "Registration failed" }
             call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Registration failed: ${e.message}"))
         }
     }
@@ -103,12 +108,14 @@ fun Route.authRoutes(jwtSecret: String, jwtIssuer: String, jwtAudience: String) 
                 .withExpiresAt(Date(System.currentTimeMillis() + 86400000))
                 .sign(Algorithm.HMAC256(jwtSecret))
             
+            logger.info { "User logged in: ${request.email}" }
+            
             call.respond(HttpStatusCode.OK, AuthResponse(
                 token = token,
                 user = UserInfo(user[Users.id].toString(), user[Users.email], user[Users.role])
             ))
         } catch (e: Exception) {
-            e.printStackTrace()
+            logger.error(e) { "Login failed" }
             call.respond(HttpStatusCode.InternalServerError, mapOf("error" to "Login failed: ${e.message}"))
         }
     }

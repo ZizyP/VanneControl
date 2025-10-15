@@ -1,6 +1,7 @@
 package com.pistoncontrol.websocket
 
 import com.pistoncontrol.mqtt.MqttManager
+import com.pistoncontrol.mqtt.MessagePayload
 import io.ktor.websocket.*
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
@@ -75,11 +76,15 @@ class WebSocketManager(private val mqttManager: MqttManager) {
             mqttManager.messageFlow.collect { message ->
                 val subscribedSessions = deviceSubscriptions[message.deviceId] ?: emptySet()
                 
+                // FIX: Serialize payload properly
+                val payloadJson = serializePayload(message.payload)
+                
                 val wsMessage = buildJsonObject {
                     put("type", "device_update")
                     put("device_id", message.deviceId)
                     put("topic", message.topic)
-                    put("payload", Json.parseToJsonElement(message.payload))
+                    put("message_type", message.messageType.name)
+                    put("payload", payloadJson)
                     put("timestamp", System.currentTimeMillis())
                 }.toString()
                 
@@ -95,6 +100,38 @@ class WebSocketManager(private val mqttManager: MqttManager) {
             }
         }
         logger.info { "MQTT to WebSocket forwarding started" }
+    }
+    
+    // FIX: This MUST be a class-level function, not local
+    private fun serializePayload(payload: MessagePayload): JsonElement {
+        return when (payload) {
+            is MessagePayload.PistonState -> buildJsonObject {
+                put("piston_number", payload.pistonNumber)
+                put("is_active", payload.isActive)
+                put("timestamp", payload.timestamp)
+            }
+            is MessagePayload.Status -> buildJsonObject {
+                put("status", payload.status)
+                payload.batteryLevel?.let { put("battery_level", it) }
+                payload.signalStrength?.let { put("signal_strength", it) }
+            }
+            is MessagePayload.Telemetry -> buildJsonObject {
+                put("sensor_type", payload.sensorType)
+                put("value", payload.value)
+                put("timestamp", payload.timestamp)
+            }
+            is MessagePayload.Error -> buildJsonObject {
+                put("error_code", payload.errorCode)
+                put("error_message", payload.errorMessage)
+            }
+            is MessagePayload.Raw -> {
+                try {
+                    Json.parseToJsonElement(payload.rawData)
+                } catch (e: Exception) {
+                    JsonPrimitive(payload.rawData)
+                }
+            }
+        }
     }
     
     suspend fun broadcast(message: String) {

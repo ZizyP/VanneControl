@@ -28,10 +28,11 @@ services:
     image: eclipse-mosquitto:2.0.18
     container_name: piston-mosquitto
     restart: unless-stopped
+    user: "1883:1883"
     volumes:
       - ./mosquitto/config/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
-      - ./mosquitto/data:/mosquitto/data
-      - ./mosquitto/log:/mosquitto/log
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
       - ./certs:/mosquitto/certs:ro
     ports:
       - "1883:1883"
@@ -62,8 +63,8 @@ services:
       DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
       MQTT_BROKER: "tcp://mosquitto:1883"
       JWT_SECRET: ${JWT_SECRET}
-      JWT_ISSUER: piston-control
-      JWT_AUDIENCE: piston-app
+      JWT_ISSUER: ${JWT_ISSUER}          # ← ADDED
+      JWT_AUDIENCE: ${JWT_AUDIENCE}      # ← ADDED
       TZ: UTC
     ports:
       - "8080:8080"
@@ -128,6 +129,10 @@ volumes:
   redis_data:
     driver: local
   nginx_logs:
+    driver: local
+  mosquitto_data:
+    driver: local
+  mosquitto_log:
     driver: local
 
 networks:
