@@ -11,7 +11,19 @@ import io.ktor.server.auth.jwt.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import io.ktor.server.websocket.*
+import kotlinx.serialization.Serializable
 import java.util.UUID
+
+@Serializable
+data class HealthResponse(
+    val status: String,
+    val timestamp: Long
+)
+
+@Serializable
+data class ErrorResponse(
+    val error: String
+)
 
 fun Application.configureRouting(
     mqttManager: MqttManager,
@@ -26,10 +38,13 @@ fun Application.configureRouting(
     
     routing {
         get("/health") {
-            call.respond(HttpStatusCode.OK, mapOf(
-                "status" to "healthy",
-                "timestamp" to System.currentTimeMillis()
-            ))
+            call.respond(
+                HttpStatusCode.OK, 
+                HealthResponse(
+                    status = "healthy",
+                    timestamp = System.currentTimeMillis()
+                )
+            )
         }
         
         head("/health") {
@@ -43,13 +58,16 @@ fun Application.configureRouting(
             get("/devices/{id}/stats") {
                 val deviceId = call.parameters["id"] ?: return@get call.respond(
                     HttpStatusCode.BadRequest, 
-                    mapOf("error" to "Missing device ID")
+                    ErrorResponse(error = "Missing device ID")
                 )
                 
                 val stats = messageHandler.getDeviceStats(deviceId)
                 
                 if (stats == null) {
-                    call.respond(HttpStatusCode.NotFound, mapOf("error" to "Device not found"))
+                    call.respond(
+                        HttpStatusCode.NotFound, 
+                        ErrorResponse(error = "Device not found")
+                    )
                 } else {
                     call.respond(HttpStatusCode.OK, stats)
                 }

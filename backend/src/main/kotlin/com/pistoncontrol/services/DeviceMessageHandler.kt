@@ -7,6 +7,7 @@ import org.jetbrains.exposed.sql.*
 import java.time.Instant
 import java.util.UUID
 import mu.KotlinLogging
+import kotlinx.serialization.Serializable
 
 private val logger = KotlinLogging.logger {}
 
@@ -40,7 +41,6 @@ class DeviceMessageHandler {
             }.singleOrNull()
             
             if (pistonRecord == null) {
-                // Piston doesn't exist, create it
                 Pistons.insert {
                     it[deviceId] = deviceUuid
                     it[pistonNumber] = payload.pistonNumber
@@ -49,7 +49,6 @@ class DeviceMessageHandler {
                 }
                 logger.info { "Created piston ${payload.pistonNumber} for device ${message.deviceId}" }
             } else {
-                // Update existing piston
                 val pistonUuid = pistonRecord[Pistons.id]
                 Pistons.update({ Pistons.id eq pistonUuid }) {
                     it[state] = if (payload.isActive) "active" else "inactive"
@@ -59,11 +58,9 @@ class DeviceMessageHandler {
                     "Updated piston ${payload.pistonNumber}: ${if (payload.isActive) "ACTIVE" else "INACTIVE"}" 
                 }
                 
-                // Log telemetry event
-                // FIX: pistonId column expects UUID, not EntityID
                 Telemetry.insert {
                     it[deviceId] = deviceUuid
-                    it[Telemetry.pistonId] = pistonUuid  // This is the UUID from the piston record
+                    it[Telemetry.pistonId] = pistonUuid
                     it[eventType] = if (payload.isActive) "activated" else "deactivated"
                     it[Telemetry.payload] = """{"piston_number":${payload.pistonNumber},"timestamp":${payload.timestamp}}"""
                     it[createdAt] = Instant.ofEpochMilli(payload.timestamp)
@@ -184,17 +181,18 @@ class DeviceMessageHandler {
                 activePistons = pistonStates.count { it.value == "active" },
                 totalPistons = pistonStates.size,
                 totalEvents = telemetryCount,
-                lastActivity = lastActivity
+                lastActivityTimestamp = lastActivity?.toEpochMilli()
             )
         }
     }
 }
 
+@Serializable
 data class DeviceStats(
     val deviceId: String,
     val status: String,
     val activePistons: Int,
     val totalPistons: Int,
     val totalEvents: Long,
-    val lastActivity: Instant?
+    val lastActivityTimestamp: Long?  // Changed from Instant to Long (epoch millis)
 )

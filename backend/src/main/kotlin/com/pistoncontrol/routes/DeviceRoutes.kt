@@ -1,7 +1,8 @@
 package com.pistoncontrol.routes
 
 import com.pistoncontrol.database.DatabaseFactory.dbQuery
-import com.pistoncontrol.database.*
+import com.pistoncontrol.database.Devices
+import com.pistoncontrol.database.Pistons
 import com.pistoncontrol.mqtt.MqttManager
 import io.ktor.http.*
 import io.ktor.server.application.*
@@ -10,286 +11,189 @@ import io.ktor.server.auth.jwt.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
 import org.jetbrains.exposed.sql.*
-import java.time.Instant
-import java.util.*
-import mu.KotlinLogging
-
-private val logger = KotlinLogging.logger {}
-
-@Serializable
-data class CreateDeviceRequest(
-    val name: String,
-    val mqtt_client_id: String
-)
-
-@Serializable
-data class PistonCommand(val action: String, val piston_number: Int)
-
-@Serializable
-data class PistonCommandResponse(
-    val success: Boolean,
-    val message: String,
-    val action: String,
-    val piston: Int
-)
-
-@Serializable
-data class DeviceResponse(
-    val id: String,
-    val name: String,
-    val status: String,
-    val pistons: List<PistonResponse>
-)
-
-@Serializable
-data class PistonResponse(
-    val id: String,
-    val piston_number: Int,
-    val state: String,
-    val last_triggered: String?
-)
-
-@Serializable
-data class TelemetryResponse(
-    val id: Long,
-    val device_id: String,
-    val piston_id: String?,
-    val event_type: String,
-    val payload: String?,
-    val created_at: String
-)
+import java.util.UUID
 
 fun Route.deviceRoutes(mqttManager: MqttManager) {
     authenticate("auth-jwt") {
-        
-        // Create device
-        post("/devices") {
-            try {
-                val request = call.receive<CreateDeviceRequest>()
-                val principal = call.principal<JWTPrincipal>()!!
-                val userId = UUID.fromString(principal.payload.getClaim("userId").asString())
-                
-                // Check if device with this MQTT client ID already exists
-                val existing = dbQuery {
-                    Devices.select { Devices.mqttClientId eq request.mqtt_client_id }
-                        .singleOrNull()
-                }
-                
-                if (existing != null) {
-                    return@post call.respond(
-                        HttpStatusCode.Conflict,
-                        mapOf("error" to "Device with this MQTT client ID already exists")
-                    )
-                }
-                
-                val deviceId = UUID.randomUUID()
-                
-                // Create device and pistons
-                dbQuery {
-                    Devices.insert {
-                        it[id] = deviceId
-                        it[name] = request.name
-                        it[ownerId] = userId
-                        it[mqttClientId] = request.mqtt_client_id
-                        it[status] = "offline"
-                        it[createdAt] = Instant.now()
-                        it[updatedAt] = Instant.now()
+        route("/devices") {
+            post {
+                try {
+                    val principal = call.principal<JWTPrincipal>()!!
+                    val userId = UUID.fromString(principal.payload.getClaim("userId").asString())
+                    val request = call.receive<CreateDeviceRequest>()
+                    
+                    val deviceId = dbQuery {
+                        val existing = Devices.select { Devices.mqttClientId eq request.mqttClientId }.singleOrNull()
+                        if (existing != null) {
+                            return@dbQuery null
+                        }
+                        
+                        Devices.insert {
+                            it[ownerId] = userId
+                            it[name] = request.name
+                            it[mqttClientId] = request.mqttClientId
+                            it[status] = "offline"
+                        } get Devices.id
                     }
                     
-                    // Create 8 pistons for this device
-                    for (pistonNum in 1..8) {
-                        Pistons.insert {
-                            it[id] = UUID.randomUUID()
-                            it[Pistons.deviceId] = deviceId
-                            it[pistonNumber] = pistonNum
-                            it[state] = "inactive"
-                            it[lastTriggered] = null
-                        }
+                    if (deviceId == null) {
+                        return@post call.respond(
+                            HttpStatusCode.Conflict,
+                            ErrorResponse("Device with this MQTT client ID already exists")
+                        )
                     }
-                }
-                
-                logger.info { "Device created: $deviceId by user $userId" }
-                
-                // Return the created device with pistons
-                val pistons = dbQuery {
-                    Pistons.select { Pistons.deviceId eq deviceId }
-                        .map { row ->
-                            PistonResponse(
-                                id = row[Pistons.id].toString(),
-                                piston_number = row[Pistons.pistonNumber],
-                                state = row[Pistons.state],
-                                last_triggered = row[Pistons.lastTriggered]?.toString()
-                            )
-                        }
-                }
-                
-                call.respond(HttpStatusCode.Created, DeviceResponse(
-                    id = deviceId.toString(),
-                    name = request.name,
-                    status = "offline",
-                    pistons = pistons
-                ))
-                
-            } catch (e: Exception) {
-                logger.error(e) { "Failed to create device" }
-                call.respond(
-                    HttpStatusCode.InternalServerError,
-                    mapOf("error" to "Failed to create device: ${e.message}")
-                )
-            }
-        }
-        
-        // Get all devices
-        get("/devices") {
-            val principal = call.principal<JWTPrincipal>()!!
-            val userId = UUID.fromString(principal.payload.getClaim("userId").asString())
-            
-            val devices = dbQuery {
-                Devices.select { Devices.ownerId eq userId }
-                    .map { deviceRow ->
-                        val deviceId = deviceRow[Devices.id]
-                        val pistons = Pistons.select { Pistons.deviceId eq deviceId }
-                            .map { pistonRow ->
-                                PistonResponse(
-                                    id = pistonRow[Pistons.id].toString(),
-                                    piston_number = pistonRow[Pistons.pistonNumber],
-                                    state = pistonRow[Pistons.state],
-                                    last_triggered = pistonRow[Pistons.lastTriggered]?.toString()
-                                )
-                            }
-                        
+                    
+                    call.respond(
+                        HttpStatusCode.Created,
                         DeviceResponse(
                             id = deviceId.toString(),
-                            name = deviceRow[Devices.name],
-                            status = deviceRow[Devices.status],
-                            pistons = pistons
+                            name = request.name,
+                            mqttClientId = request.mqttClientId,
+                            status = "offline"
                         )
-                    }
-            }
-            
-            call.respond(HttpStatusCode.OK, devices)
-        }
-        
-        // Get specific device
-        get("/devices/{id}") {
-            val deviceId = call.parameters["id"] ?: return@get call.respond(
-                HttpStatusCode.BadRequest, mapOf("error" to "Missing device ID")
-            )
-            val principal = call.principal<JWTPrincipal>()!!
-            val userId = UUID.fromString(principal.payload.getClaim("userId").asString())
-            
-            val device = dbQuery {
-                Devices.select {
-                    (Devices.id eq UUID.fromString(deviceId)) and
-                    (Devices.ownerId eq userId)
-                }.singleOrNull()?.let { deviceRow ->
-                    val pistons = Pistons.select { Pistons.deviceId eq deviceRow[Devices.id] }
-                        .map { pistonRow ->
-                            PistonResponse(
-                                id = pistonRow[Pistons.id].toString(),
-                                piston_number = pistonRow[Pistons.pistonNumber],
-                                state = pistonRow[Pistons.state],
-                                last_triggered = pistonRow[Pistons.lastTriggered]?.toString()
-                            )
-                        }
-                    
-                    DeviceResponse(
-                        id = deviceRow[Devices.id].toString(),
-                        name = deviceRow[Devices.name],
-                        status = deviceRow[Devices.status],
-                        pistons = pistons
+                    )
+                } catch (e: Exception) {
+                    call.respond(
+                        HttpStatusCode.InternalServerError,
+                        ErrorResponse("Failed to create device: ${e.message}")
                     )
                 }
             }
             
-            if (device == null) {
-                call.respond(HttpStatusCode.NotFound, mapOf("error" to "Device not found"))
-            } else {
-                call.respond(HttpStatusCode.OK, device)
-            }
-        }
-        
-        // Control piston - THIS IS THE FIX!
-        post("/devices/{deviceId}/pistons/{pistonNumber}") {
-            val deviceId = call.parameters["deviceId"] ?: return@post call.respond(
-                HttpStatusCode.BadRequest, mapOf("error" to "Missing device ID")
-            )
-            val pistonNumber = call.parameters["pistonNumber"]?.toIntOrNull() ?: return@post call.respond(
-                HttpStatusCode.BadRequest, mapOf("error" to "Invalid piston number")
-            )
-            
-            val request = call.receive<PistonCommand>()
-            val principal = call.principal<JWTPrincipal>()!!
-            val userId = UUID.fromString(principal.payload.getClaim("userId").asString())
-            
-            val hasAccess = dbQuery {
-                Devices.select {
-                    (Devices.id eq UUID.fromString(deviceId)) and
-                    (Devices.ownerId eq userId)
-                }.count() > 0
+            get {
+                try {
+                    val principal = call.principal<JWTPrincipal>()!!
+                    val userId = UUID.fromString(principal.payload.getClaim("userId").asString())
+                    
+                    val devices = dbQuery {
+                        Devices.select { Devices.ownerId eq userId }.map {
+                            DeviceResponse(
+                                id = it[Devices.id].toString(),
+                                name = it[Devices.name],
+                                mqttClientId = it[Devices.mqttClientId],
+                                status = it[Devices.status]
+                            )
+                        }
+                    }
+                    
+                    call.respond(HttpStatusCode.OK, devices)
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.InternalServerError, ErrorResponse(e.message ?: "Unknown error"))
+                }
             }
             
-            if (!hasAccess) {
-                return@post call.respond(HttpStatusCode.Forbidden, mapOf("error" to "Access denied"))
-            }
-            
-            val command = Json.encodeToString(
-                PistonCommand.serializer(),
-                PistonCommand(request.action, pistonNumber)
-            )
-            
-            mqttManager.publishCommand(deviceId, command)
-            logger.info { "Command sent to device $deviceId: ${request.action} piston $pistonNumber" }
-            
-            // FIX: Use @Serializable data class instead of mapOf
-            call.respond(HttpStatusCode.OK, PistonCommandResponse(
-                success = true,
-                message = "Command sent",
-                action = request.action,
-                piston = pistonNumber
-            ))
-        }
-        
-        // Get telemetry
-        get("/devices/{deviceId}/telemetry") {
-            val deviceId = call.parameters["deviceId"] ?: return@get call.respond(
-                HttpStatusCode.BadRequest, mapOf("error" to "Missing device ID")
-            )
-            val limit = call.request.queryParameters["limit"]?.toIntOrNull() ?: 100
-            val principal = call.principal<JWTPrincipal>()!!
-            val userId = UUID.fromString(principal.payload.getClaim("userId").asString())
-            
-            val hasAccess = dbQuery {
-                Devices.select {
-                    (Devices.id eq UUID.fromString(deviceId)) and
-                    (Devices.ownerId eq userId)
-                }.count() > 0
-            }
-            
-            if (!hasAccess) {
-                return@get call.respond(HttpStatusCode.Forbidden, mapOf("error" to "Access denied"))
-            }
-            
-            val telemetry = dbQuery {
-                Telemetry.select { Telemetry.deviceId eq UUID.fromString(deviceId) }
-                    .orderBy(Telemetry.createdAt to SortOrder.DESC)
-                    .limit(limit)
-                    .map { row ->
-                        TelemetryResponse(
-                            id = row[Telemetry.id],
-                            device_id = row[Telemetry.deviceId].toString(),
-                            piston_id = row[Telemetry.pistonId]?.toString(),
-                            event_type = row[Telemetry.eventType],
-                            payload = row[Telemetry.payload],
-                            created_at = row[Telemetry.createdAt].toString()
+            get("/{id}") {
+                val deviceId = call.parameters["id"]
+                if (deviceId == null) {
+                    return@get call.respond(HttpStatusCode.BadRequest, ErrorResponse("Missing device ID"))
+                }
+                
+                try {
+                    val device = dbQuery {
+                        Devices.select { Devices.id eq UUID.fromString(deviceId) }.singleOrNull()
+                    }
+                    
+                    if (device == null) {
+                        call.respond(HttpStatusCode.NotFound, ErrorResponse("Device not found"))
+                    } else {
+                        call.respond(
+                            HttpStatusCode.OK,
+                            DeviceResponse(
+                                id = device[Devices.id].toString(),
+                                name = device[Devices.name],
+                                mqttClientId = device[Devices.mqttClientId],
+                                status = device[Devices.status]
+                            )
                         )
                     }
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.InternalServerError, ErrorResponse(e.message ?: "Unknown error"))
+                }
             }
             
-            call.respond(HttpStatusCode.OK, telemetry)
+            post("/{deviceId}/pistons/{pistonNumber}") {
+                val deviceId = call.parameters["deviceId"]
+                val pistonNumberStr = call.parameters["pistonNumber"]
+                
+                if (deviceId == null) {
+                    return@post call.respond(HttpStatusCode.BadRequest, ErrorResponse("Missing device ID"))
+                }
+                
+                val pistonNumber = pistonNumberStr?.toIntOrNull()
+                if (pistonNumber == null || pistonNumber !in 1..8) {
+                    return@post call.respond(HttpStatusCode.BadRequest, ErrorResponse("Invalid piston number"))
+                }
+                
+                try {
+                    val principal = call.principal<JWTPrincipal>()!!
+                    val userId = UUID.fromString(principal.payload.getClaim("userId").asString())
+                    val request = call.receive<PistonCommand>()
+                    
+                    val deviceUuid = UUID.fromString(deviceId)
+                    val ownsDevice = dbQuery {
+                        Devices.select { 
+                            (Devices.id eq deviceUuid) and (Devices.ownerId eq userId) 
+                        }.singleOrNull() != null
+                    }
+                    
+                    if (!ownsDevice) {
+                        return@post call.respond(HttpStatusCode.Forbidden, ErrorResponse("Access denied"))
+                    }
+                    
+                    mqttManager.publishCommand(deviceId, "${request.action}:$pistonNumber", useBinary = true)
+                    
+                    call.respond(
+                        HttpStatusCode.OK,
+                        CommandResponse(
+                            success = true,
+                            message = "Command sent",
+                            deviceId = deviceId,
+                            pistonNumber = pistonNumber,
+                            action = request.action
+                        )
+                    )
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.InternalServerError, ErrorResponse(e.message ?: "Unknown error"))
+                }
+            }
+            
+            get("/{deviceId}/pistons") {
+                val deviceId = call.parameters["deviceId"]
+                if (deviceId == null) {
+                    return@get call.respond(HttpStatusCode.BadRequest, ErrorResponse("Missing device ID"))
+                }
+                
+                try {
+                    val principal = call.principal<JWTPrincipal>()!!
+                    val userId = UUID.fromString(principal.payload.getClaim("userId").asString())
+                    val deviceUuid = UUID.fromString(deviceId)
+                    
+                    val ownsDevice = dbQuery {
+                        Devices.select { 
+                            (Devices.id eq deviceUuid) and (Devices.ownerId eq userId) 
+                        }.singleOrNull() != null
+                    }
+                    
+                    if (!ownsDevice) {
+                        return@get call.respond(HttpStatusCode.Forbidden, ErrorResponse("Access denied"))
+                    }
+                    
+                    val pistons = dbQuery {
+                        Pistons.select { Pistons.deviceId eq deviceUuid }.map {
+                            PistonResponse(
+                                piston_number = it[Pistons.pistonNumber],
+                                state = it[Pistons.state],
+                                last_triggered = it[Pistons.lastTriggered]?.toString()
+                            )
+                        }
+                    }
+                    
+                    call.respond(HttpStatusCode.OK, pistons)
+                } catch (e: Exception) {
+                    call.respond(HttpStatusCode.InternalServerError, ErrorResponse(e.message ?: "Unknown error"))
+                }
+            }
         }
     }
 }
