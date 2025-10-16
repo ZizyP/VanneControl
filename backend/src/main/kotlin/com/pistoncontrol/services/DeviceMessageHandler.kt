@@ -7,7 +7,6 @@ import org.jetbrains.exposed.sql.*
 import java.time.Instant
 import java.util.UUID
 import mu.KotlinLogging
-import kotlinx.serialization.Serializable
 
 private val logger = KotlinLogging.logger {}
 
@@ -35,37 +34,23 @@ class DeviceMessageHandler {
         dbQuery {
             val deviceUuid = UUID.fromString(message.deviceId)
             
-            val pistonRecord = Pistons.select {
-                (Pistons.deviceId eq deviceUuid) and
+            Pistons.update({
+                (Pistons.deviceId eq deviceUuid) and 
                 (Pistons.pistonNumber eq payload.pistonNumber)
-            }.singleOrNull()
-            
-            if (pistonRecord == null) {
-                Pistons.insert {
-                    it[deviceId] = deviceUuid
-                    it[pistonNumber] = payload.pistonNumber
-                    it[state] = if (payload.isActive) "active" else "inactive"
-                    it[lastTriggered] = Instant.ofEpochMilli(payload.timestamp)
-                }
-                logger.info { "Created piston ${payload.pistonNumber} for device ${message.deviceId}" }
-            } else {
-                val pistonUuid = pistonRecord[Pistons.id]
-                Pistons.update({ Pistons.id eq pistonUuid }) {
-                    it[state] = if (payload.isActive) "active" else "inactive"
-                    it[lastTriggered] = Instant.ofEpochMilli(payload.timestamp)
-                }
-                logger.info { 
-                    "Updated piston ${payload.pistonNumber}: ${if (payload.isActive) "ACTIVE" else "INACTIVE"}" 
-                }
-                
-                Telemetry.insert {
-                    it[deviceId] = deviceUuid
-                    it[Telemetry.pistonId] = pistonUuid
-                    it[eventType] = if (payload.isActive) "activated" else "deactivated"
-                    it[Telemetry.payload] = """{"piston_number":${payload.pistonNumber},"timestamp":${payload.timestamp}}"""
-                    it[createdAt] = Instant.ofEpochMilli(payload.timestamp)
-                }
+            }) {
+                it[state] = if (payload.isActive) "active" else "inactive"
+                it[lastTriggered] = Instant.now()
             }
+            
+            Telemetry.insert {
+                it[deviceId] = deviceUuid
+                it[Telemetry.pistonId] = null
+                it[eventType] = if (payload.isActive) "activated" else "deactivated"
+                it[Telemetry.payload] = """{"piston_number":${payload.pistonNumber},"timestamp":${payload.timestamp}}"""
+                it[createdAt] = Instant.ofEpochMilli(payload.timestamp)
+            }
+            
+            logger.info { "Piston ${payload.pistonNumber} on device ${message.deviceId}: ${if (payload.isActive) "active" else "inactive"}" }
         }
     }
     
@@ -181,18 +166,17 @@ class DeviceMessageHandler {
                 activePistons = pistonStates.count { it.value == "active" },
                 totalPistons = pistonStates.size,
                 totalEvents = telemetryCount,
-                lastActivityTimestamp = lastActivity?.toEpochMilli()
+                lastActivity = lastActivity
             )
         }
     }
 }
 
-@Serializable
 data class DeviceStats(
     val deviceId: String,
     val status: String,
     val activePistons: Int,
     val totalPistons: Int,
     val totalEvents: Long,
-    val lastActivityTimestamp: Long?  // Changed from Instant to Long (epoch millis)
+    val lastActivity: Instant?
 )

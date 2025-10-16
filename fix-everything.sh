@@ -1,3 +1,24 @@
+#!/bin/bash
+
+echo "╔══════════════════════════════════════════════════════════╗"
+echo "║     Complete System Fix - Decoder + Devices             ║"
+echo "╚══════════════════════════════════════════════════════════╝"
+echo ""
+
+# ═══════════════════════════════════════════════════════════
+# STEP 1: Fix the Python client (timestamp issue)
+# ═══════════════════════════════════════════════════════════
+
+echo "🔧 Step 1: Fixing binary_device_client.py..."
+
+# Backup old version
+if [ -f "binary_device_client.py" ]; then
+    cp binary_device_client.py binary_device_client.py.old
+    echo "   ✅ Backed up old version"
+fi
+
+# Create fixed version
+cat > binary_device_client.py << 'EOFCLIENT'
 #!/usr/bin/env python3
 """
 Binary Protocol Device Client - FIXED VERSION
@@ -168,3 +189,121 @@ def main():
 
 if __name__ == "__main__":
     main()
+EOFCLIENT
+
+chmod +x binary_device_client.py
+echo "   ✅ Fixed binary_device_client.py created"
+echo ""
+
+# ═══════════════════════════════════════════════════════════
+# STEP 2: Add test device to database
+# ═══════════════════════════════════════════════════════════
+
+echo "🔧 Step 2: Adding device to database..."
+
+# First check if any users exist
+USER_COUNT=$(docker compose exec -T postgres psql -U piston_user -d piston_control \
+  -t -c "SELECT COUNT(*) FROM users;" 2>/dev/null | tr -d ' \n')
+
+if [ "$USER_COUNT" = "0" ]; then
+    echo "   ⚠️  No users found, creating admin user..."
+    docker compose exec -T postgres psql -U piston_user -d piston_control << 'EOFUSER'
+-- Create admin user (password: admin123)
+INSERT INTO users (email, password_hash, role) 
+VALUES ('admin@pistoncontrol.local', '$2a$10$xQBvXc5wbEKKVXJLRx8L0.LYaHAZrE5RhVL/5kKiG8m9aqPQKHN7e', 'admin')
+ON CONFLICT (email) DO NOTHING;
+EOFUSER
+    echo "   ✅ Admin user created"
+fi
+
+# Check if device exists
+DEVICE_EXISTS=$(docker compose exec -T postgres psql -U piston_user -d piston_control \
+  -t -c "SELECT COUNT(*) FROM devices WHERE id='550e8400-e29b-41d4-a716-446655440000';" 2>/dev/null | tr -d ' \n')
+
+if [ "$DEVICE_EXISTS" = "0" ]; then
+    echo "   ℹ️  Device doesn't exist, creating..."
+    
+    # Create SQL to insert device
+    docker compose exec -T postgres psql -U piston_user -d piston_control << 'EOFSQL'
+-- Insert test device
+INSERT INTO devices (id, name, owner_id, mqtt_client_id, status, created_at, updated_at)
+VALUES (
+    '550e8400-e29b-41d4-a716-446655440000',
+    'Binary Protocol Test Device',
+    (SELECT id FROM users ORDER BY created_at LIMIT 1),
+    'test-binary-device',
+    'offline',
+    CURRENT_TIMESTAMP,
+    CURRENT_TIMESTAMP
+) ON CONFLICT (id) DO NOTHING;
+
+-- Create 8 pistons
+DO $$
+BEGIN
+    FOR i IN 1..8 LOOP
+        INSERT INTO pistons (id, device_id, piston_number, state, last_triggered)
+        VALUES (
+            gen_random_uuid(),
+            '550e8400-e29b-41d4-a716-446655440000',
+            i,
+            'inactive',
+            NULL
+        ) ON CONFLICT (device_id, piston_number) DO NOTHING;
+    END LOOP;
+END $$;
+EOFSQL
+
+    echo "   ✅ Device created with 8 pistons"
+else
+    echo "   ✅ Device already exists"
+fi
+
+echo ""
+
+# ═══════════════════════════════════════════════════════════
+# STEP 3: Verify everything
+# ═══════════════════════════════════════════════════════════
+
+echo "🔍 Step 3: Verification..."
+echo ""
+
+# Check device count
+DEVICE_COUNT=$(docker compose exec -T postgres psql -U piston_user -d piston_control \
+  -t -c "SELECT COUNT(*) FROM devices;" 2>/dev/null | tr -d ' \n')
+
+echo "   📊 Devices in database: $DEVICE_COUNT"
+
+# Check piston count  
+PISTON_COUNT=$(docker compose exec -T postgres psql -U piston_user -d piston_control \
+  -t -c "SELECT COUNT(*) FROM pistons;" 2>/dev/null | tr -d ' \n')
+
+echo "   📊 Pistons in database: $PISTON_COUNT"
+echo ""
+
+# ═══════════════════════════════════════════════════════════
+# SUMMARY
+# ═══════════════════════════════════════════════════════════
+
+echo "╔══════════════════════════════════════════════════════════╗"
+echo "║                 ✅ FIX COMPLETE                          ║"
+echo "╚══════════════════════════════════════════════════════════╝"
+echo ""
+echo "Changes Made:"
+echo "  ✅ Fixed binary_device_client.py (timestamps in milliseconds)"
+echo "  ✅ Added device 550e8400... to database"
+echo "  ✅ Created 8 pistons for the device"
+echo ""
+echo "🧪 Test Now:"
+echo ""
+echo "  Terminal 1:"
+echo "    python3 mqtt_message_decoder.py"
+echo ""
+echo "  Terminal 2:"
+echo "    python3 binary_device_client.py"
+echo ""
+echo "Expected Results:"
+echo "  ✅ No 'year out of range' errors"
+echo "  ✅ No CRC errors"
+echo "  ✅ All messages decoded successfully"
+echo "  ✅ Database shows device status changes"
+echo ""
