@@ -41,7 +41,11 @@ object Telemetry : Table("telemetry") {
     val deviceId = uuid("device_id")
     val pistonId = uuid("piston_id").nullable()
     val eventType = text("event_type")
-    val payload = text("payload").nullable()
+    
+    // ✅ SOLUTION: Use our custom jsonb() function
+    // This properly casts to JSONB in PostgreSQL
+    val payload = jsonb("payload").nullable()
+    
     val createdAt = timestamp("created_at")
     
     override val primaryKey = PrimaryKey(id)
