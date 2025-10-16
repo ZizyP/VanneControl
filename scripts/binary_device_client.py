@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""
-Binary Protocol Device Client - FIXED VERSION
-Timestamps in MILLISECONDS, proper CRC calculation
-"""
 import paho.mqtt.client as mqtt
 import struct
 import uuid
@@ -25,11 +21,11 @@ class BinaryProtocolClient:
         self.client.on_message = self.on_message
     
     def on_connect(self, client, userdata, flags, rc):
-        print(f"✅ Connected to MQTT broker (rc={rc})")
+        print(f"✅ Connected (rc={rc})")
         client.subscribe(f"devices/{self.device_id}/commands/binary")
     
     def on_message(self, client, userdata, msg):
-        print(f"📥 Command received")
+        pass
     
     def connect(self):
         self.client.connect(BROKER, PORT, 60)
@@ -41,82 +37,58 @@ class BinaryProtocolClient:
         self.client.disconnect()
     
     def send_piston_state(self, piston_number: int, is_active: bool):
-        # CRITICAL FIX: Use MILLISECONDS not seconds!
+        # CRITICAL: MILLISECONDS not seconds!
         timestamp_ms = int(time.time() * 1000)
-        
         payload = struct.pack('<BBQ', piston_number, 1 if is_active else 0, timestamp_ms)
         message = self._create_message(self.MSG_PISTON_STATE, payload)
-        
-        topic = f"devices/{self.device_id}/binary"
-        self.client.publish(topic, message, qos=1)
-        
-        state = "ACTIVE" if is_active else "INACTIVE"
-        print(f"🔵 Sending piston state: #{piston_number} -> {state}")
-        print(f"   ✓ Sent {len(message)} bytes")
-    
-    def send_status_update(self, status: str, battery_level: int = None, signal_strength: int = None):
-        status_code = {'offline': 0, 'online': 1, 'error': 2}.get(status.lower(), 1)
-        battery = battery_level if battery_level is not None else 255
-        signal = signal_strength if signal_strength is not None else 255
-        
-        payload = struct.pack('<BBB', status_code, battery, signal)
-        message = self._create_message(self.MSG_STATUS_UPDATE, payload)
-        
         self.client.publish(f"devices/{self.device_id}/binary", message, qos=1)
-        print(f"🔵 Sending status: {status}, Battery: {battery_level}%, Signal: {signal_strength}%")
+        print(f"🔵 Piston #{piston_number} -> {'ACTIVE' if is_active else 'INACTIVE'}")
+    
+    def send_status_update(self, status: str, battery_level=None, signal_strength=None):
+        code = {'offline': 0, 'online': 1, 'error': 2}.get(status.lower(), 1)
+        battery = battery_level if battery_level else 255
+        signal = signal_strength if signal_strength else 255
+        payload = struct.pack('<BBB', code, battery, signal)
+        message = self._create_message(self.MSG_STATUS_UPDATE, payload)
+        self.client.publish(f"devices/{self.device_id}/binary", message, qos=1)
+        print(f"🔵 Status: {status}")
     
     def send_telemetry(self, sensor_type: str, value: float):
-        sensor_code = {'temperature': 0, 'pressure': 1, 'humidity': 2, 'voltage': 3}.get(sensor_type.lower(), 0)
+        code = {'temperature': 0, 'pressure': 1, 'humidity': 2, 'voltage': 3}.get(sensor_type.lower(), 0)
         timestamp_ms = int(time.time() * 1000)
-        
-        payload = struct.pack('<BfQ', sensor_code, value, timestamp_ms)
+        payload = struct.pack('<BfQ', code, value, timestamp_ms)
         message = self._create_message(self.MSG_TELEMETRY, payload)
-        
         self.client.publish(f"devices/{self.device_id}/binary", message, qos=1)
-        print(f"🔵 Sending telemetry: {sensor_type} = {value}")
+        print(f"🔵 Telemetry: {sensor_type} = {value}")
     
     def send_error(self, error_code: int, error_message: str):
-        message_bytes = error_message.encode('utf-8')
-        payload = struct.pack('<I', error_code) + message_bytes
+        payload = struct.pack('<I', error_code) + error_message.encode('utf-8')
         message = self._create_message(self.MSG_ERROR, payload)
-        
         self.client.publish(f"devices/{self.device_id}/binary", message, qos=1)
-        print(f"🔴 Sending error: Code {error_code} - {error_message}")
+        print(f"🔴 Error {error_code}: {error_message}")
     
     def _create_message(self, message_type: int, payload: bytes) -> bytes:
-        header = struct.pack('B', message_type)
-        device_id_bytes = self.device_id.bytes
-        data = header + device_id_bytes + payload
-        checksum = self._calculate_crc16(data)
-        return data + struct.pack('<H', checksum)
+        data = struct.pack('B', message_type) + self.device_id.bytes + payload
+        crc = self._calculate_crc16(data)
+        return data + struct.pack('<H', crc)
     
     def _calculate_crc16(self, data: bytes) -> int:
         crc = 0xFFFF
         for byte in data:
             crc ^= byte
             for _ in range(8):
-                if crc & 0x0001:
-                    crc = (crc >> 1) ^ 0x8005
-                else:
-                    crc >>= 1
+                crc = (crc >> 1) ^ 0x8005 if crc & 1 else crc >> 1
         return crc & 0xFFFF
 
 def main():
-    print("\n╔══════════════════════════════════════════════════════════╗")
-    print("║     🔧 Binary Protocol Device Simulator (FIXED)         ║")
-    print("╚══════════════════════════════════════════════════════════╝\n")
-    
+    print("\n🔧 Binary Protocol Device Simulator\n")
     client = BinaryProtocolClient(DEVICE_ID)
     
     try:
         client.connect()
+        print("\nDEMO SEQUENCE\n" + "="*60 + "\n")
         
-        print("="*60)
-        print("DEMO SEQUENCE")
-        print("="*60 + "\n")
-        
-        # Sequence
-        client.send_status_update("online", battery_level=95, signal_strength=85)
+        client.send_status_update("online", 95, 85)
         time.sleep(3)
         
         client.send_piston_state(3, True)
@@ -131,26 +103,24 @@ def main():
         client.send_piston_state(3, False)
         time.sleep(3)
         
-        for piston in [1, 2, 4, 5]:
-            client.send_piston_state(piston, True)
+        for p in [1, 2, 4, 5]:
+            client.send_piston_state(p, True)
             time.sleep(1)
         
         time.sleep(2)
-        
         client.send_telemetry("voltage", 12.3)
         time.sleep(2)
-        
         client.send_telemetry("pressure", 1013.25)
         time.sleep(3)
         
         client.send_error(503, "Piston 7 sensor malfunction")
         time.sleep(3)
         
-        for piston in [1, 2, 4, 5]:
-            client.send_piston_state(piston, False)
+        for p in [1, 2, 4, 5]:
+            client.send_piston_state(p, False)
             time.sleep(1)
         
-        client.send_status_update("online", battery_level=92, signal_strength=80)
+        client.send_status_update("online", 92, 80)
         
         print("\n" + "="*60)
         print("DEMO COMPLETE - Press Ctrl+C to exit")
@@ -158,13 +128,13 @@ def main():
         
         while True:
             time.sleep(10)
-            client.send_status_update("online", battery_level=90, signal_strength=75)
+            client.send_status_update("online", 90, 75)
             
     except KeyboardInterrupt:
-        print("\n⚠️  Interrupted by user")
+        print("\n⚠️  Stopped")
     finally:
         client.disconnect()
-        print("✅ Clean shutdown")
+        print("✅ Shutdown complete")
 
 if __name__ == "__main__":
     main()
