@@ -126,7 +126,7 @@ class BinaryProtocolParser {
             buffer.get(payload)
             
             // Step 6: Verify checksum for data integrity
-            val receivedChecksum = buffer.short.toInt() and 0xFFFF
+            val receivedChecksum = buffer.short
             val calculatedChecksum = calculateChecksum(data, data.size - CHECKSUM_SIZE)
             
             if (receivedChecksum != calculatedChecksum) {
@@ -297,7 +297,7 @@ class BinaryProtocolParser {
      * 2. Dividing by a polynomial (0x8005 in this case)
      * 3. Using the remainder as the checksum
      */
-    private fun calculateChecksum(data: ByteArray, length: Int): Int {
+    private fun calculateChecksum(data: ByteArray, length: Int): Short {
         var crc = 0xFFFF
         
         for (i in 0 until length) {
@@ -312,7 +312,7 @@ class BinaryProtocolParser {
             }
         }
         
-        return crc and 0xFFFF
+        return crc.toShort()
     }
     
     /**
@@ -343,7 +343,7 @@ class BinaryProtocolParser {
         // Calculate and write checksum
         val dataForChecksum = buffer.array()
         val checksum = calculateChecksum(dataForChecksum, totalSize - CHECKSUM_SIZE)
-        buffer.putShort(checksum.toShort())
+        buffer.putShort(checksum)
         
         return buffer.array()
     }
