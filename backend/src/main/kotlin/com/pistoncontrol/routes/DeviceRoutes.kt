@@ -65,19 +65,33 @@ fun Route.deviceRoutes(mqttManager: MqttManager) {
                 try {
                     val principal = call.principal<JWTPrincipal>()!!
                     val userId = UUID.fromString(principal.payload.getClaim("userId").asString())
-                    
-                    val devices = dbQuery {
-                        Devices.select { Devices.ownerId eq userId }.map {
-                            DeviceResponse(
-                                id = it[Devices.id].toString(),
-                                name = it[Devices.name],
-                                mqttClientId = it[Devices.mqttClientId],
-                                status = it[Devices.status]
+
+                    val devicesWithPistons = dbQuery {
+                        Devices.select { Devices.ownerId eq userId }.map { deviceRow ->
+                            val deviceId = deviceRow[Devices.id]
+
+                            // Fetch pistons for this device
+                            val pistons = Pistons.select { Pistons.deviceId eq deviceId }.map {
+                                PistonResponse(
+                                    piston_number = it[Pistons.pistonNumber],
+                                    state = it[Pistons.state],
+                                    last_triggered = it[Pistons.lastTriggered]?.toString()
+                                )
+                            }
+
+                            DeviceWithPistonsResponse(
+                                id = deviceId.toString(),
+                                name = deviceRow[Devices.name],
+                                device_id = deviceRow[Devices.mqttClientId],  // Maps to mobile's device_id field
+                                status = deviceRow[Devices.status],
+                                last_seen = null,  // TODO: implement timestamp tracking
+                                pistons = pistons
                             )
                         }
                     }
-                    
-                    call.respond(HttpStatusCode.OK, devices)
+
+                    // Wrap in DevicesListResponse to match mobile expectations
+                    call.respond(HttpStatusCode.OK, DevicesListResponse(devices = devicesWithPistons))
                 } catch (e: Exception) {
                     call.respond(HttpStatusCode.InternalServerError, ErrorResponse(e.message ?: "Unknown error"))
                 }
@@ -88,24 +102,50 @@ fun Route.deviceRoutes(mqttManager: MqttManager) {
                 if (deviceId == null) {
                     return@get call.respond(HttpStatusCode.BadRequest, ErrorResponse("Missing device ID"))
                 }
-                
+
                 try {
-                    val device = dbQuery {
-                        Devices.select { Devices.id eq UUID.fromString(deviceId) }.singleOrNull()
+                    val principal = call.principal<JWTPrincipal>()!!
+                    val userId = UUID.fromString(principal.payload.getClaim("userId").asString())
+                    val deviceUuid = try {
+                        UUID.fromString(deviceId)
+                    } catch (e: IllegalArgumentException) {
+                        return@get call.respond(HttpStatusCode.BadRequest, ErrorResponse("Invalid device ID format"))
                     }
-                    
-                    if (device == null) {
+
+                    val deviceData = dbQuery {
+                        // Check ownership
+                        val device = Devices.select {
+                            (Devices.id eq deviceUuid) and (Devices.ownerId eq userId)
+                        }.singleOrNull()
+
+                        if (device == null) {
+                            return@dbQuery null
+                        }
+
+                        // Fetch pistons for this device
+                        val pistons = Pistons.select { Pistons.deviceId eq deviceUuid }.map {
+                            PistonResponse(
+                                piston_number = it[Pistons.pistonNumber],
+                                state = it[Pistons.state],
+                                last_triggered = it[Pistons.lastTriggered]?.toString()
+                            )
+                        }
+
+                        DeviceWithPistonsResponse(
+                            id = device[Devices.id].toString(),
+                            name = device[Devices.name],
+                            device_id = device[Devices.mqttClientId],  // Maps to mobile's device_id field
+                            status = device[Devices.status],
+                            last_seen = null,  // TODO: implement timestamp tracking
+                            pistons = pistons
+                        )
+                    }
+
+                    if (deviceData == null) {
                         call.respond(HttpStatusCode.NotFound, ErrorResponse("Device not found"))
                     } else {
-                        call.respond(
-                            HttpStatusCode.OK,
-                            DeviceResponse(
-                                id = device[Devices.id].toString(),
-                                name = device[Devices.name],
-                                mqttClientId = device[Devices.mqttClientId],
-                                status = device[Devices.status]
-                            )
-                        )
+                        // Wrap in object matching mobile's DeviceResponse expectation
+                        call.respond(HttpStatusCode.OK, mapOf("device" to deviceData))
                     }
                 } catch (e: Exception) {
                     call.respond(HttpStatusCode.InternalServerError, ErrorResponse(e.message ?: "Unknown error"))
@@ -115,42 +155,83 @@ fun Route.deviceRoutes(mqttManager: MqttManager) {
             post("/{deviceId}/pistons/{pistonNumber}") {
                 val deviceId = call.parameters["deviceId"]
                 val pistonNumberStr = call.parameters["pistonNumber"]
-                
+
                 if (deviceId == null) {
                     return@post call.respond(HttpStatusCode.BadRequest, ErrorResponse("Missing device ID"))
                 }
-                
+
                 val pistonNumber = pistonNumberStr?.toIntOrNull()
                 if (pistonNumber == null || pistonNumber !in 1..8) {
                     return@post call.respond(HttpStatusCode.BadRequest, ErrorResponse("Invalid piston number"))
                 }
-                
+
                 try {
                     val principal = call.principal<JWTPrincipal>()!!
                     val userId = UUID.fromString(principal.payload.getClaim("userId").asString())
                     val request = call.receive<PistonCommand>()
-                    
+
                     val deviceUuid = UUID.fromString(deviceId)
                     val ownsDevice = dbQuery {
-                        Devices.select { 
-                            (Devices.id eq deviceUuid) and (Devices.ownerId eq userId) 
+                        Devices.select {
+                            (Devices.id eq deviceUuid) and (Devices.ownerId eq userId)
                         }.singleOrNull() != null
                     }
-                    
+
                     if (!ownsDevice) {
                         return@post call.respond(HttpStatusCode.Forbidden, ErrorResponse("Access denied"))
                     }
-                    
+
+                    // Send MQTT command using binary protocol
                     mqttManager.publishCommand(deviceId, "${request.action}:$pistonNumber", useBinary = true)
-                    
+
+                    // Update database with new state
+                    val newState = if (request.action == "activate") "active" else "inactive"
+                    val updatedPiston = dbQuery {
+                        val now = java.time.Instant.now()
+
+                        // Update or insert piston state
+                        val existing = Pistons.select {
+                            (Pistons.deviceId eq deviceUuid) and (Pistons.pistonNumber eq pistonNumber)
+                        }.singleOrNull()
+
+                        if (existing != null) {
+                            Pistons.update({
+                                (Pistons.deviceId eq deviceUuid) and (Pistons.pistonNumber eq pistonNumber)
+                            }) {
+                                it[state] = newState
+                                it[lastTriggered] = now
+                            }
+
+                            val pistonId = existing[Pistons.id]
+                            PistonWithIdResponse(
+                                id = pistonId.toString(),
+                                piston_number = pistonNumber,
+                                state = newState,
+                                last_triggered = now.toString()
+                            )
+                        } else {
+                            // Create piston record if doesn't exist
+                            val pistonId = Pistons.insert {
+                                it[Pistons.deviceId] = deviceUuid
+                                it[Pistons.pistonNumber] = pistonNumber
+                                it[state] = newState
+                                it[lastTriggered] = now
+                            } get Pistons.id
+
+                            PistonWithIdResponse(
+                                id = pistonId.toString(),
+                                piston_number = pistonNumber,
+                                state = newState,
+                                last_triggered = now.toString()
+                            )
+                        }
+                    }
+
                     call.respond(
                         HttpStatusCode.OK,
-                        CommandResponse(
-                            success = true,
-                            message = "Command sent",
-                            deviceId = deviceId,
-                            pistonNumber = pistonNumber,
-                            action = request.action
+                        PistonControlResponse(
+                            message = "Piston ${if (newState == "active") "activated" else "deactivated"}",
+                            piston = updatedPiston
                         )
                     )
                 } catch (e: Exception) {

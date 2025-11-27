@@ -57,26 +57,31 @@ fun Application.configureRouting(
         authenticate("auth-jwt") {
             get("/devices/{id}/stats") {
                 val deviceId = call.parameters["id"] ?: return@get call.respond(
-                    HttpStatusCode.BadRequest, 
+                    HttpStatusCode.BadRequest,
                     ErrorResponse(error = "Missing device ID")
                 )
-                
+
                 val stats = messageHandler.getDeviceStats(deviceId)
-                
+
                 if (stats == null) {
                     call.respond(
-                        HttpStatusCode.NotFound, 
+                        HttpStatusCode.NotFound,
                         ErrorResponse(error = "Device not found")
                     )
                 } else {
                     call.respond(HttpStatusCode.OK, stats)
                 }
             }
-        }
-        
-        webSocket("/ws") {
-            val sessionId = UUID.randomUUID().toString()
-            wsManager.handleConnection(sessionId, this)
+
+            // WebSocket endpoint with JWT authentication
+            webSocket("/ws") {
+                val principal = call.principal<JWTPrincipal>()!!
+                val userId = principal.payload.getClaim("userId").asString()
+                val sessionId = UUID.randomUUID().toString()
+
+                // Pass userId to handle connection for device-specific filtering
+                wsManager.handleConnection(sessionId, userId, this)
+            }
         }
     }
 }

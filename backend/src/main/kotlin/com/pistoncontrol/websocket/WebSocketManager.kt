@@ -10,13 +10,18 @@ import mu.KotlinLogging
 
 private val logger = KotlinLogging.logger {}
 
-class WebSocketManager(private val mqttManager: MqttManager) {
+class WebSocketManager(private val mqttManager: MqttManager) : CoroutineScope {
+    // Use SupervisorJob for proper lifecycle management instead of GlobalScope
+    override val coroutineContext = SupervisorJob() + Dispatchers.Default
+
     private val sessions = ConcurrentHashMap<String, DefaultWebSocketSession>()
+    private val sessionUsers = ConcurrentHashMap<String, String>()  // sessionId -> userId
     private val deviceSubscriptions = ConcurrentHashMap<String, MutableSet<String>>()
-    
-    suspend fun handleConnection(sessionId: String, session: DefaultWebSocketSession) {
+
+    suspend fun handleConnection(sessionId: String, userId: String, session: DefaultWebSocketSession) {
         sessions[sessionId] = session
-        logger.info { "WebSocket session connected: $sessionId" }
+        sessionUsers[sessionId] = userId
+        logger.info { "WebSocket session connected: $sessionId (user: $userId)" }
         
         try {
             session.send(Frame.Text("""{"type":"connected","session_id":"$sessionId"}"""))
@@ -67,27 +72,49 @@ class WebSocketManager(private val mqttManager: MqttManager) {
     
     private fun cleanup(sessionId: String) {
         sessions.remove(sessionId)
+        sessionUsers.remove(sessionId)
         deviceSubscriptions.values.forEach { it.remove(sessionId) }
         logger.info { "WebSocket session cleaned up: $sessionId" }
     }
-    
+
     fun startMqttForwarding() {
-        GlobalScope.launch {
+        launch {  // Use class CoroutineScope instead of GlobalScope
             mqttManager.messageFlow.collect { message ->
                 val subscribedSessions = deviceSubscriptions[message.deviceId] ?: emptySet()
-                
-                // FIX: Serialize payload properly
-                val payloadJson = serializePayload(message.payload)
-                
-                val wsMessage = buildJsonObject {
-                    put("type", "device_update")
-                    put("device_id", message.deviceId)
-                    put("topic", message.topic)
-                    put("message_type", message.messageType.name)
-                    put("payload", payloadJson)
-                    put("timestamp", System.currentTimeMillis())
-                }.toString()
-                
+
+                // Format message to match mobile app expectations
+                val wsMessage = when (message.payload) {
+                    is MessagePayload.PistonState -> {
+                        val payload = message.payload as MessagePayload.PistonState
+                        buildJsonObject {
+                            put("type", "piston_update")  // Matches mobile expectations
+                            put("device_id", message.deviceId)
+                            put("piston_number", payload.pistonNumber)
+                            put("state", if (payload.isActive) "active" else "inactive")
+                            put("timestamp", payload.timestamp.toString())
+                        }.toString()
+                    }
+                    is MessagePayload.Status -> {
+                        val payload = message.payload as MessagePayload.Status
+                        buildJsonObject {
+                            put("type", "device_status")  // Matches mobile expectations
+                            put("device_id", message.deviceId)
+                            put("status", payload.status)
+                            put("timestamp", System.currentTimeMillis().toString())
+                        }.toString()
+                    }
+                    else -> {
+                        // For other message types, use generic format
+                        buildJsonObject {
+                            put("type", "device_update")
+                            put("device_id", message.deviceId)
+                            put("message_type", message.messageType.name)
+                            put("payload", serializePayload(message.payload))
+                            put("timestamp", System.currentTimeMillis())
+                        }.toString()
+                    }
+                }
+
                 subscribedSessions.forEach { sessionId ->
                     sessions[sessionId]?.let { session ->
                         try {
@@ -100,6 +127,11 @@ class WebSocketManager(private val mqttManager: MqttManager) {
             }
         }
         logger.info { "MQTT to WebSocket forwarding started" }
+    }
+
+    fun shutdown() {
+        coroutineContext.cancelChildren()
+        logger.info { "WebSocketManager shut down" }
     }
     
     // FIX: This MUST be a class-level function, not local

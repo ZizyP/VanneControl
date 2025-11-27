@@ -77,10 +77,10 @@ CREATE TRIGGER update_users_updated_at BEFORE UPDATE ON users
 CREATE TRIGGER update_devices_updated_at BEFORE UPDATE ON devices
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
--- Insert default admin user (password: admin123 - CHANGE THIS!)
-INSERT INTO users (email, password_hash, role) 
-VALUES ('admin@pistoncontrol.local', '$2a$10$xQBvXc5wbEKKVXJLRx8L0.LYaHAZrE5RhVL/5kKiG8m9aqPQKHN7e', 'admin')
-ON CONFLICT (email) DO NOTHING;
+-- SECURITY: Default admin user removed for production security
+-- To create an admin user, use the /auth/register endpoint
+-- Then manually update the role in the database:
+-- UPDATE users SET role = 'admin' WHERE email = 'your-admin-email@example.com';
 
 -- Grant necessary permissions
 GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO piston_user;

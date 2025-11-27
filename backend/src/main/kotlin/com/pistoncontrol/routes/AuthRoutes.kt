@@ -15,18 +15,44 @@ import java.util.UUID
 import java.util.Date
 import java.time.Instant
 
+/**
+ * Validate password complexity
+ * Returns null if valid, error message if invalid
+ */
+private fun validatePassword(password: String): String? {
+    if (password.length < 8) {
+        return "Password must be at least 8 characters"
+    }
+    if (!password.any { it.isDigit() }) {
+        return "Password must contain at least one digit"
+    }
+    if (!password.any { it.isUpperCase() }) {
+        return "Password must contain at least one uppercase letter"
+    }
+    if (!password.any { it.isLowerCase() }) {
+        return "Password must contain at least one lowercase letter"
+    }
+    // Optional: Add special character requirement
+    // if (!password.any { !it.isLetterOrDigit() }) {
+    //     return "Password must contain at least one special character"
+    // }
+    return null
+}
+
 fun Route.authRoutes(jwtSecret: String, jwtIssuer: String, jwtAudience: String) {
     route("/auth") {
         post("/register") {
             try {
                 val request = call.receive<RegisterRequest>()
-                
+
                 if (!request.email.contains("@")) {
                     return@post call.respond(HttpStatusCode.BadRequest, ErrorResponse("Invalid email"))
                 }
-                
-                if (request.password.length < 8) {
-                    return@post call.respond(HttpStatusCode.BadRequest, ErrorResponse("Password must be at least 8 characters"))
+
+                // Validate password complexity
+                val passwordError = validatePassword(request.password)
+                if (passwordError != null) {
+                    return@post call.respond(HttpStatusCode.BadRequest, ErrorResponse(passwordError))
                 }
                 
                 val hashedPassword = BCrypt.hashpw(request.password, BCrypt.gensalt())
