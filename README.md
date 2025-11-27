@@ -277,6 +277,11 @@ Contributions are welcome! Please:
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
+## 📞 Contact
+
+**Mohamed Yassine Kaibi**
+- LinkedIn: [https://www.linkedin.com/in/mohamedyassinekaibi/](https://www.linkedin.com/in/mohamedyassinekaibi/)
+
 ## 🙏 Acknowledgments
 
 - [Ktor](https://ktor.io/) - Kotlin web framework
